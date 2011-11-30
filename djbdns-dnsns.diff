@@ -1,0 +1,223 @@
+dnsns, for djbdns-1.05: DNS lookup tool to find NS records
+Brian J. Kifiak, bk@rt.fm
+20010326
+Public domain
+
+diff -u -N djbdns-1.05.orig/FILES djbdns-1.05/FILES
+--- djbdns-1.05.orig/FILES	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/FILES	Mon Mar 26 16:53:42 2001
+@@ -41,6 +41,7 @@
+ dnsname.c
+ dnstxt.c
+ dnsmx.c
++dnsns.c
+ dnsfilter.c
+ random-ip.c
+ dnsqr.c
+@@ -84,6 +85,7 @@
+ dns_mx.c
+ dns_name.c
+ dns_nd.c
++dns_ns.c
+ dns_packet.c
+ dns_random.c
+ dns_rcip.c
+diff -u -N djbdns-1.05.orig/Makefile djbdns-1.05/Makefile
+--- djbdns-1.05.orig/Makefile	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/Makefile	Mon Mar 26 16:57:15 2001
+@@ -227,10 +227,10 @@
+ 
+ dns.a: \
+ makelib dns_dfd.o dns_domain.o dns_dtda.o dns_ip.o dns_ipq.o dns_mx.o \
+-dns_name.o dns_nd.o dns_packet.o dns_random.o dns_rcip.o dns_rcrw.o \
+-dns_resolve.o dns_sortip.o dns_transmit.o dns_txt.o
++dns_name.o dns_nd.o dns_ns.o dns_packet.o dns_random.o dns_rcip.o \
++dns_rcrw.o dns_resolve.o dns_sortip.o dns_transmit.o dns_txt.o
+ 	./makelib dns.a dns_dfd.o dns_domain.o dns_dtda.o dns_ip.o \
+-	dns_ipq.o dns_mx.o dns_name.o dns_nd.o dns_packet.o \
++	dns_ipq.o dns_mx.o dns_name.o dns_nd.o dns_ns.o dns_packet.o \
+ 	dns_random.o dns_rcip.o dns_rcrw.o dns_resolve.o \
+ 	dns_sortip.o dns_transmit.o dns_txt.o
+ 
+@@ -274,6 +274,11 @@
+ taia.h tai.h uint64.h taia.h
+ 	./compile dns_nd.c
+ 
++dns_ns.o: \
++compile dns_ns.c stralloc.h gen_alloc.h byte.h uint16.h dns.h \
++stralloc.h iopause.h taia.h tai.h uint64.h taia.h
++	./compile dns_ns.c
++
+ dns_packet.o: \
+ compile dns_packet.c error.h dns.h stralloc.h gen_alloc.h iopause.h \
+ taia.h tai.h uint64.h taia.h
+@@ -402,6 +407,17 @@
+ gen_alloc.h iopause.h taia.h tai.h uint64.h taia.h
+ 	./compile dnsname.c
+ 
++dnsns: \
++load dnsns.o iopause.o dns.a env.a libtai.a alloc.a buffer.a unix.a \
++byte.a socket.lib
++	./load dnsns iopause.o dns.a env.a libtai.a alloc.a \
++	buffer.a unix.a byte.a  `cat socket.lib`
++
++dnsns.o: \
++compile dnsns.c buffer.h exit.h strerr.h uint16.h byte.h str.h fmt.h \
++dns.h stralloc.h gen_alloc.h iopause.h taia.h tai.h uint64.h taia.h
++	./compile dnsns.c
++
+ dnsq: \
+ load dnsq.o iopause.o printrecord.o printpacket.o parsetype.o dns.a \
+ env.a libtai.a buffer.a alloc.a unix.a byte.a socket.lib
+@@ -676,8 +692,8 @@
+ dnscache-conf dnscache walldns-conf walldns rbldns-conf rbldns \
+ rbldns-data pickdns-conf pickdns pickdns-data tinydns-conf tinydns \
+ tinydns-data tinydns-get tinydns-edit axfr-get axfrdns-conf axfrdns \
+-dnsip dnsipq dnsname dnstxt dnsmx dnsfilter random-ip dnsqr dnsq \
+-dnstrace dnstracesort cachetest utime rts
++dnsip dnsipq dnsname dnstxt dnsmx dnsns dnsfilter random-ip dnsqr \
++dnsq dnstrace dnstracesort cachetest utime rts
+ 
+ prot.o: \
+ compile prot.c hasshsgr.h prot.h
+diff -u -N djbdns-1.05.orig/TARGETS djbdns-1.05/TARGETS
+--- djbdns-1.05.orig/TARGETS	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/TARGETS	Mon Mar 26 16:58:06 2001
+@@ -105,6 +105,7 @@
+ dns_mx.o
+ dns_name.o
+ dns_nd.o
++dns_ns.o
+ dns_packet.o
+ dns_random.o
+ dns_rcip.o
+@@ -186,6 +187,8 @@
+ dnstxt
+ dnsmx.o
+ dnsmx
++dnsns.o
++dnsns
+ dnsfilter.o
+ sgetopt.o
+ subgetopt.o
+diff -u -N djbdns-1.05.orig/dns.h djbdns-1.05/dns.h
+--- djbdns-1.05.orig/dns.h	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/dns.h	Mon Mar 26 16:58:40 2001
+@@ -76,6 +76,8 @@
+ extern int dns_txt(stralloc *,const stralloc *);
+ extern int dns_mx_packet(stralloc *,const char *,unsigned int);
+ extern int dns_mx(stralloc *,const stralloc *);
++extern int dns_ns_packet(stralloc *,const char *,unsigned int);
++extern int dns_ns(stralloc *,const stralloc *);
+ 
+ extern int dns_resolvconfrewrite(stralloc *);
+ extern int dns_ip4_qualify_rules(stralloc *,stralloc *,const stralloc *,const stralloc *);
+diff -u -N djbdns-1.05.orig/dns_ns.c djbdns-1.05/dns_ns.c
+--- djbdns-1.05.orig/dns_ns.c	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/dns_ns.c	Mon Mar 26 16:50:33 2001
+@@ -0,0 +1,46 @@
++#include "stralloc.h"
++#include "byte.h"
++#include "uint16.h"
++#include "dns.h"
++
++static char *q = 0;
++
++int dns_ns_packet(stralloc *out,const char *buf,unsigned int len)
++{
++  unsigned int pos;
++  char header[12];
++  uint16 numanswers;
++  uint16 datalen;
++
++  if (!stralloc_copys(out,"")) return -1;
++
++  pos = dns_packet_copy(buf,len,0,header,12); if (!pos) return -1;
++  uint16_unpack_big(header + 6,&numanswers);
++  pos = dns_packet_skipname(buf,len,pos); if (!pos) return -1;
++  pos += 4;
++ 
++  while (numanswers--) {
++    pos = dns_packet_skipname(buf,len,pos); if (!pos) return -1;
++    pos = dns_packet_copy(buf,len,pos,header,10); if (!pos) return -1;
++    uint16_unpack_big(header + 8,&datalen);
++    if (byte_equal(header,2,DNS_T_NS))
++      if (byte_equal(header + 2,2,DNS_C_IN)) {
++      if (!dns_packet_getname(buf,len,pos,&q)) return -1;
++      if (!dns_domain_todot_cat(out,q)) return -1;
++      if (!stralloc_0(out)) return -1;
++      }
++    pos += datalen;
++  }
++
++  return 0;
++}
++
++int dns_ns(stralloc *out,const stralloc *fqdn)
++{
++  if (!dns_domain_fromdot(&q,fqdn->s,fqdn->len)) return -1;
++  if (dns_resolve(q,DNS_T_NS) == -1) return -1;
++  if (dns_ns_packet(out,dns_resolve_tx.packet,dns_resolve_tx.packetlen) == -1) return -1;
++  dns_transmit_free(&dns_resolve_tx);
++  dns_domain_free(&q);
++  return 0;
++}
+diff -u -N djbdns-1.05.orig/dnsns.c djbdns-1.05/dnsns.c
+--- djbdns-1.05.orig/dnsns.c	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/dnsns.c	Mon Mar 26 16:50:33 2001
+@@ -0,0 +1,44 @@
++#include "buffer.h"
++#include "exit.h"
++#include "strerr.h"
++#include "byte.h"
++#include "dns.h"
++
++#define FATAL "dnsns: fatal: "
++
++static char seed[128];
++
++static stralloc fqdn;
++static stralloc out;
++
++int main(int argc,char **argv)
++{
++  int i;
++  int j;
++
++  dns_random_init(seed);
++
++  if (*argv) ++argv;
++
++  while (*argv) {
++    if (!stralloc_copys(&fqdn,*argv))
++      strerr_die2x(111,FATAL,"out of memory");
++    if (dns_ns(&out,&fqdn) == -1)
++      strerr_die4sys(111,FATAL,"unable to find NS records for ",*argv,": ");
++
++    i = 0;
++    while(i + 2 < out.len) {
++      j = byte_chr(out.s + i,out.len - i,0);
++      buffer_put(buffer_1,out.s + i,j);
++      buffer_puts(buffer_1," ");
++      i += j + 1;
++    }
++
++    buffer_puts(buffer_1,"\n");
++
++    ++argv;
++  }
++
++  buffer_flush(buffer_1);
++  _exit(0);
++}
+diff -u -N djbdns-1.05.orig/hier.c djbdns-1.05/hier.c
+--- djbdns-1.05.orig/hier.c	Sun Feb 11 13:11:45 2001
++++ djbdns-1.05/hier.c	Mon Mar 26 16:50:33 2001
+@@ -33,6 +33,7 @@
+   c(auto_home,"bin","dnsname",-1,-1,0755);
+   c(auto_home,"bin","dnstxt",-1,-1,0755);
+   c(auto_home,"bin","dnsmx",-1,-1,0755);
++  c(auto_home,"bin","dnsns",-1,-1,0755);
+   c(auto_home,"bin","dnsfilter",-1,-1,0755);
+   c(auto_home,"bin","random-ip",-1,-1,0755);
+   c(auto_home,"bin","dnsqr",-1,-1,0755);
