@@ -1,0 +1,62 @@
+Files /tmp/djbdns-1.05/.authnixdns.c.swp and ./.authnixdns.c.swp differ
+diff -Nur /tmp/djbdns-1.05/Makefile ./Makefile
+--- /tmp/djbdns-1.05/Makefile	2001-02-11 21:11:45.000000000 +0000
++++ ./Makefile	2005-08-01 13:23:59.000000000 +0000
+@@ -677,7 +677,7 @@
+ rbldns-data pickdns-conf pickdns pickdns-data tinydns-conf tinydns \
+ tinydns-data tinydns-get tinydns-edit axfr-get axfrdns-conf axfrdns \
+ dnsip dnsipq dnsname dnstxt dnsmx dnsfilter random-ip dnsqr dnsq \
+-dnstrace dnstracesort cachetest utime rts
++dnstrace dnstracesort cachetest utime rts authnixdns
+ 
+ prot.o: \
+ compile prot.c hasshsgr.h prot.h
+@@ -986,6 +991,14 @@
+ 	qlog.o prot.o dns.a libtai.a env.a cdb.a alloc.a buffer.a \
+ 	unix.a byte.a  `cat socket.lib`
+ 
++authnixdns: \
++load authnixdns.o server.o droproot.o response.o qlog.o \
++prot.o dns.a libtai.a env.a cdb.a alloc.a buffer.a unix.a byte.a \
++socket.lib
++	./load authnixdns server.o droproot.o response.o \
++	qlog.o prot.o dns.a libtai.a env.a cdb.a alloc.a buffer.a \
++	unix.a byte.a  `cat socket.lib`
++
+ tinydns-conf: \
+ load tinydns-conf.o generic-conf.o auto_home.o buffer.a unix.a byte.a
+ 	./load tinydns-conf generic-conf.o auto_home.o buffer.a \
+@@ -1036,6 +1049,10 @@
+ compile tinydns.c dns.h stralloc.h gen_alloc.h iopause.h taia.h tai.h \
+ uint64.h taia.h
+ 	./compile tinydns.c
++authnixdns.o: \
++compile authnixdns.c dns.h stralloc.h gen_alloc.h iopause.h taia.h tai.h \
++uint64.h taia.h
++	./compile authnixdns.c
+ 
+ uint16_pack.o: \
+ compile uint16_pack.c uint16.h
+diff -Nur /tmp/djbdns-1.05/authnixdns.c ./authnixdns.c
+--- /tmp/djbdns-1.05/authnixdns.c	1970-01-01 00:00:00.000000000 +0000
++++ ./authnixdns.c	2005-08-01 13:28:13.000000000 +0000
+@@ -0,0 +1,19 @@
++#include "byte.h"
++#include "dns.h"
++#include "dd.h"
++#include "response.h"
++
++const char *fatal = "authnixdns: fatal: ";
++const char *starting = "starting authnixdns\n";
++
++void initialize(void)
++{
++  ;
++}
++
++int respond(char *q,char qtype[2])
++{
++  response_nxdomain();
++  response_rfinish(RESPONSE_AUTHORITY);
++  return 1;
++}

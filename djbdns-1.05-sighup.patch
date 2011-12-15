@@ -1,0 +1,338 @@
+diff -Nur djbdns-1.05/CHANGES djbdns-1.05-ma/CHANGES
+--- djbdns-1.05/CHANGES	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/CHANGES	Tue Aug 13 22:08:25 2002
+@@ -270,6 +270,12 @@
+ 		tnx Chris Saia.
+ 20000325
+ 	version: DNScache 1.00.
++20000824 Matthias Andree
++	feature: catch hangup signal and reread roots
++	patch level: ma1
++20000830 Matthias Andree
++	portability: use sig library rather than calling signal directly	
++	patch level: ma2
+ 20000914
+ 	ui: axfr-get decodes PTR. tnx to various people.
+ 	ui: added dnsqr.
+diff -Nur djbdns-1.05/Makefile djbdns-1.05-ma/Makefile
+--- djbdns-1.05/Makefile	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/Makefile	Tue Aug 13 22:08:25 2002
+@@ -4,6 +4,8 @@
+ 
+ default: it
+ 
++include Makefile.sig
++
+ alloc.a: \
+ makelib alloc.o alloc_re.o getln.o getln2.o stralloc_cat.o \
+ stralloc_catb.o stralloc_cats.o stralloc_copy.o stralloc_eady.o \
+@@ -209,6 +211,9 @@
+ 	> choose
+ 	chmod 755 choose
+ 
++clean:
++	rm -f `cat TARGETS`
++
+ compile: \
+ warn-auto.sh conf-cc
+ 	( cat warn-auto.sh; \
+@@ -320,10 +325,10 @@
+ dnscache: \
+ load dnscache.o droproot.o okclient.o log.o cache.o query.o \
+ response.o dd.o roots.o iopause.o prot.o dns.a env.a alloc.a buffer.a \
+-libtai.a unix.a byte.a socket.lib
++libtai.a unix.a byte.a sig.a socket.lib
+ 	./load dnscache droproot.o okclient.o log.o cache.o \
+ 	query.o response.o dd.o roots.o iopause.o prot.o dns.a \
+-	env.a alloc.a buffer.a libtai.a unix.a byte.a  `cat \
++	env.a alloc.a buffer.a libtai.a unix.a byte.a sig.a `cat \
+ 	socket.lib`
+ 
+ dnscache-conf: \
+diff -Nur djbdns-1.05/Makefile.sig djbdns-1.05-ma/Makefile.sig
+--- djbdns-1.05/Makefile.sig	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/Makefile.sig	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,27 @@
++sig.o: \
++compile sig.c sig.h
++	./compile sig.c
++
++sig_block.o: \
++compile sig_block.c sig.h hassgprm.h
++	./compile sig_block.c
++
++sig_catch.o: \
++compile sig_catch.c sig.h hassgact.h
++	./compile sig_catch.c
++
++sig_pause.o: \
++compile sig_pause.c sig.h hassgprm.h
++	./compile sig_pause.c
++
++sig.a: \
++makelib sig.o sig_block.o sig_catch.o sig_pause.o
++	./makelib sig.a sig.o sig_block.o sig_catch.o sig_pause.o
++
++hassgact.h: \
++choose compile load trysgact.c hassgact.h1 hassgact.h2
++	./choose cl trysgact hassgact.h1 hassgact.h2 > hassgact.h
++
++hassgprm.h: \
++choose compile load trysgprm.c hassgprm.h1 hassgprm.h2
++	./choose cl trysgprm hassgprm.h1 hassgprm.h2 > hassgprm.h
+diff -Nur djbdns-1.05/SYSDEPS djbdns-1.05-ma/SYSDEPS
+--- djbdns-1.05/SYSDEPS	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/SYSDEPS	Tue Aug 13 22:08:25 2002
+@@ -7,4 +7,6 @@
+ direntry.h
+ hasshsgr.h
+ hasdevtcp.h
++hassgact.h
++hassgprm.h
+ socket.lib
+diff -Nur djbdns-1.05/TARGETS djbdns-1.05-ma/TARGETS
+--- djbdns-1.05/TARGETS	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/TARGETS	Tue Aug 13 22:08:25 2002
+@@ -214,3 +214,10 @@
+ it
+ setup
+ check
++sig.o
++sig.a
++sig_catch.o
++sig_block.o
++hassgact.h
++hassgprm.h
++sig_pause.o
+diff -Nur djbdns-1.05/VERSION djbdns-1.05-ma/VERSION
+--- djbdns-1.05/VERSION	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/VERSION	Tue Aug 13 22:08:39 2002
+@@ -1 +1 @@
+-djbdns 1.05
++djbdns 1.05-ma1
+diff -Nur djbdns-1.05/dnscache.c djbdns-1.05-ma/dnscache.c
+--- djbdns-1.05/dnscache.c	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/dnscache.c	Tue Aug 13 22:08:25 2002
+@@ -22,6 +22,7 @@
+ #include "log.h"
+ #include "okclient.h"
+ #include "droproot.h"
++#include "sig.h"
+ 
+ static int packetquery(char *buf,unsigned int len,char **q,char qtype[2],char qclass[2],char id[2])
+ {
+@@ -384,6 +385,14 @@
+   
+ #define FATAL "dnscache: fatal: "
+ 
++void hup_me()
++{
++  if (!roots_init())
++    strerr_die2sys(111,FATAL,"unable to read servers: ");
++
++  log_reread();
++}
++
+ char seed[128];
+ 
+ int main()
+@@ -441,6 +450,8 @@
+ 
+   if (socket_listen(tcp53,20) == -1)
+     strerr_die2sys(111,FATAL,"unable to listen on TCP socket: ");
++
++  sig_catch(sig_hangup, hup_me);
+ 
+   log_startup();
+   doit();
+diff -Nur djbdns-1.05/hassgact.h1 djbdns-1.05-ma/hassgact.h1
+--- djbdns-1.05/hassgact.h1	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/hassgact.h1	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1 @@
++/* sysdep: -sigaction */
+diff -Nur djbdns-1.05/hassgact.h2 djbdns-1.05-ma/hassgact.h2
+--- djbdns-1.05/hassgact.h2	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/hassgact.h2	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,2 @@
++/* sysdep: +sigaction */
++#define HASSIGACTION 1
+diff -Nur djbdns-1.05/hassgprm.h1 djbdns-1.05-ma/hassgprm.h1
+--- djbdns-1.05/hassgprm.h1	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/hassgprm.h1	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1 @@
++/* sysdep: -sigprocmask */
+diff -Nur djbdns-1.05/hassgprm.h2 djbdns-1.05-ma/hassgprm.h2
+--- djbdns-1.05/hassgprm.h2	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/hassgprm.h2	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,2 @@
++/* sysdep: +sigprocmask */
++#define HASSIGPROCMASK 1
+diff -Nur djbdns-1.05/log.c djbdns-1.05-ma/log.c
+--- djbdns-1.05/log.c	Sun Feb 11 22:11:45 2001
++++ djbdns-1.05-ma/log.c	Tue Aug 13 22:08:25 2002
+@@ -88,6 +88,12 @@
+   }
+ }
+ 
++void log_reread(void)
++{
++  string("rereading servers configuration");
++  line();
++}
++
+ void log_startup(void)
+ {
+   string("starting");
+diff -Nur djbdns-1.05/sig.c djbdns-1.05-ma/sig.c
+--- djbdns-1.05/sig.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/sig.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,12 @@
++#include <signal.h>
++#include "sig.h"
++
++int sig_alarm = SIGALRM;
++int sig_child = SIGCHLD;
++int sig_cont = SIGCONT;
++int sig_hangup = SIGHUP;
++int sig_pipe = SIGPIPE;
++int sig_term = SIGTERM;
++
++void (*sig_defaulthandler)() = SIG_DFL;
++void (*sig_ignorehandler)() = SIG_IGN;
+diff -Nur djbdns-1.05/sig.h djbdns-1.05-ma/sig.h
+--- djbdns-1.05/sig.h	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/sig.h	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,25 @@
++#ifndef SIG_H
++#define SIG_H
++
++extern int sig_alarm;
++extern int sig_child;
++extern int sig_cont;
++extern int sig_hangup;
++extern int sig_pipe;
++extern int sig_term;
++
++extern void (*sig_defaulthandler)();
++extern void (*sig_ignorehandler)();
++
++extern void sig_catch(int,void (*)());
++#define sig_ignore(s) (sig_catch((s),sig_ignorehandler))
++#define sig_uncatch(s) (sig_catch((s),sig_defaulthandler))
++
++extern void sig_block(int);
++extern void sig_unblock(int);
++extern void sig_blocknone(void);
++extern void sig_pause(void);
++
++extern void sig_dfl(int);
++
++#endif
+diff -Nur djbdns-1.05/sig_block.c djbdns-1.05-ma/sig_block.c
+--- djbdns-1.05/sig_block.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/sig_block.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,38 @@
++#include <signal.h>
++#include "sig.h"
++#include "hassgprm.h"
++
++void sig_block(int sig)
++{
++#ifdef HASSIGPROCMASK
++  sigset_t ss;
++  sigemptyset(&ss);
++  sigaddset(&ss,sig);
++  sigprocmask(SIG_BLOCK,&ss,(sigset_t *) 0);
++#else
++  sigblock(1 << (sig - 1));
++#endif
++}
++
++void sig_unblock(int sig)
++{
++#ifdef HASSIGPROCMASK
++  sigset_t ss;
++  sigemptyset(&ss);
++  sigaddset(&ss,sig);
++  sigprocmask(SIG_UNBLOCK,&ss,(sigset_t *) 0);
++#else
++  sigsetmask(sigsetmask(~0) & ~(1 << (sig - 1)));
++#endif
++}
++
++void sig_blocknone(void)
++{
++#ifdef HASSIGPROCMASK
++  sigset_t ss;
++  sigemptyset(&ss);
++  sigprocmask(SIG_SETMASK,&ss,(sigset_t *) 0);
++#else
++  sigsetmask(0);
++#endif
++}
+diff -Nur djbdns-1.05/sig_catch.c djbdns-1.05-ma/sig_catch.c
+--- djbdns-1.05/sig_catch.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/sig_catch.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,16 @@
++#include <signal.h>
++#include "sig.h"
++#include "hassgact.h"
++
++void sig_catch(int sig,void (*f)())
++{
++#ifdef HASSIGACTION
++  struct sigaction sa;
++  sa.sa_handler = f;
++  sa.sa_flags = 0;
++  sigemptyset(&sa.sa_mask);
++  sigaction(sig,&sa,(struct sigaction *) 0);
++#else
++  signal(sig,f); /* won't work under System V, even nowadays---dorks */
++#endif
++}
+diff -Nur djbdns-1.05/sig_pause.c djbdns-1.05-ma/sig_pause.c
+--- djbdns-1.05/sig_pause.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/sig_pause.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,14 @@
++#include <signal.h>
++#include "sig.h"
++#include "hassgprm.h"
++
++void sig_pause(void)
++{
++#ifdef HASSIGPROCMASK
++  sigset_t ss;
++  sigemptyset(&ss);
++  sigsuspend(&ss);
++#else
++  sigpause(0);
++#endif
++}
+diff -Nur djbdns-1.05/trysgact.c djbdns-1.05-ma/trysgact.c
+--- djbdns-1.05/trysgact.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/trysgact.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,10 @@
++#include <signal.h>
++
++main()
++{
++  struct sigaction sa;
++  sa.sa_handler = 0;
++  sa.sa_flags = 0;
++  sigemptyset(&sa.sa_mask);
++  sigaction(0,&sa,(struct sigaction *) 0);
++}
+diff -Nur djbdns-1.05/trysgprm.c djbdns-1.05-ma/trysgprm.c
+--- djbdns-1.05/trysgprm.c	Thu Jan  1 01:00:00 1970
++++ djbdns-1.05-ma/trysgprm.c	Tue Aug 13 22:08:25 2002
+@@ -0,0 +1,10 @@
++#include <signal.h>
++
++main()
++{
++  sigset_t ss;
++ 
++  sigemptyset(&ss);
++  sigaddset(&ss,SIGCHLD);
++  sigprocmask(SIG_SETMASK,&ss,(sigset_t *) 0);
++}
